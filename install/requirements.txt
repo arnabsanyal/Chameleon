@@ -1,0 +1,16 @@
+torch>=2.0.0
+diffusers>=0.25.0
+transformers>=4.35.0
+accelerate>=0.24.0
+safetensors>=0.4.0
+Pillow>=10.0.0
+tqdm>=4.66.0
+numpy>=1.24.0
+clean-fid>=0.1.35
+imageio>=2.31.0
+imageio-ffmpeg>=0.4.9
+opencv-python>=4.8.0
+xformers>=0.0.22  # Optional but recommended for memory efficiency
+
+tomli>=2.0.1
+tomli-w>=1.0.0
