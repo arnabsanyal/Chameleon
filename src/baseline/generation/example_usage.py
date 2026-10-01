@@ -6,10 +6,8 @@ Run this after installing requirements
 import os
 from baseline_generation import (
     ImageBaselineGenerator,
-    VideoBaselineGenerator,
     generate_sample_prompts
 )
-from pathlib import Path
 
 def example_image_generation():
     """Example: Generate baseline images"""
@@ -37,49 +35,10 @@ def example_image_generation():
     generator.cleanup()
 
 
-def example_video_generation():
-    """Example: Generate baseline videos from images"""
-    print("\n" + "="*60)
-    print("Example 2: Video Generation with SVD\n")
-
-    # First, we need some input images
-    # Let's use the images from the previous example
-    input_images_dir = os.path.join(os.environ.get("CHAMELEON_OUTPUT_ROOT", os.path.join(os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")), "outputs")), "example_images")
-
-    if not Path(input_images_dir).exists():
-        print(f"Input directory {input_images_dir} not found.")
-        print("Please run example_image_generation() first.")
-        return
-
-    # Load input images
-    input_images = sorted(list(Path(input_images_dir).glob("*.png")))[:5]  # Use first 5 images
-
-    if not input_images:
-        print("No images found in input directory")
-        return
-
-    print(f"Using {len(input_images)} input images")
-
-    # Create generator
-    generator = VideoBaselineGenerator()
-
-    # Generate videos
-    output_dir = os.path.join(os.environ.get("CHAMELEON_OUTPUT_ROOT", os.path.join(os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")), "outputs")), "example_videos")
-    generator.generate_videos(
-        input_images=[str(img) for img in input_images],
-        output_dir=output_dir,
-        fps=7,
-        num_frames=14  # Shorter for quick testing
-    )
-
-    print(f"\nVideos saved to: {output_dir}")
-    generator.cleanup()
-
-
 def example_custom_prompts():
     """Example: Use custom prompts from a list"""
     print("\n" + "="*60)
-    print("Example 3: Custom Prompts\n")
+    print("Example 2: Custom Prompts\n")
 
     # Define custom prompts
     custom_prompts = [
@@ -119,10 +78,7 @@ if __name__ == "__main__":
         # Example 1: Generate images
         example_image_generation()
 
-        # Example 2: Generate videos from the images
-        example_video_generation()
-
-        # Example 3: Custom prompts
+        # Example 2: Custom prompts
         example_custom_prompts()
 
         print("\n" + "="*60)
