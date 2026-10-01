@@ -131,6 +131,7 @@ quick_test_coco_w4a8() {
         echo "Expected:"
         echo "  $W4A8_W_CONFIG"
         echo "  $W4A8_A_CONFIG"
+        echo "Fetch them with: bash third_party/mixdq/fetch_configs.sh (from the repository root)"
         return
     fi
     echo "Running quick test (100 images, W4A8 mixed-precision fake-quant, COCO captions)..."
@@ -205,6 +206,7 @@ coco_eval_w4a8() {
         echo "Expected:"
         echo "  $W4A8_W_CONFIG"
         echo "  $W4A8_A_CONFIG"
+        echo "Fetch them with: bash third_party/mixdq/fetch_configs.sh (from the repository root)"
         return
     fi
 

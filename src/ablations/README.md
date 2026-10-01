@@ -164,10 +164,3 @@ Output lands at `$CHAMELEON_OUTPUT_ROOT/ablations/<ablation>/<row>/`.
 
 With the two natural cuts above: **~30 h**.
 With 4× A100 parallel-over-rows: **~9 h overnight**.
-
-## Out of scope for this ablation pack
-
-The Chameleon-Video matrix (configurations 0 / 1 / 1+2 / 1+3 / 1+2+3) is
-specified in `src/chameleon-video/run_chameleon_video.sh` option 7 and is
-intentionally NOT in this pack — that is the rebuttal-phase plan, awaiting
-working video runs.
