@@ -1,0 +1,472 @@
+--- a/pipeline.py
++++ b/pipeline.py
+@@ -10,7 +10,58 @@
+ import torch.nn.functional as F
+ from torch.ao.quantization import QConfig, MinMaxObserver, PlaceholderObserver, QuantStub, DeQuantStub
+ 
+-import mixdq_extension._C
++try:
++    import mixdq_extension._C
++except ModuleNotFoundError:
++    # The CUDA C extension was built editable into /tmp/MixDQ/kernels and the
++    # source dir got wiped.  Without the compiled kernels we fall back to a
++    # FAKE-QUANT path for BOTH W4A8 and W8A8 (weights folded to N-bit symmetric
++    # using the shipped per-channel scales + per-tensor A8 fake-quant on the
++    # input, then a standard fp16 F.linear/F.conv2d) — consistent with how every
++    # other model in the eval is reported (fake-quant, not real low-bit kernels).
++    import sys, types
++    def _mixdq_kernel_missing(*a, **k):
++        raise RuntimeError(
++            "mixdq_extension._C kernels not built; only the W4A8 fake-quant "
++            "path is available. Re-clone MixDQ into /tmp/MixDQ and `pip install "
++            "-e kernels` to restore W8A8.")
++    _C_stub = types.ModuleType("mixdq_extension._C")
++    _C_stub._is_stub = True                       # marker: kernels NOT real
++    _C_stub.quantize_per_tensor_to_int8 = _mixdq_kernel_missing
++    _C_stub.qconv2d_w8_a8_ohalf         = _mixdq_kernel_missing
++    _C_stub.qlinear_w8_a8_ohalf         = _mixdq_kernel_missing
++    _pkg_stub = sys.modules.setdefault("mixdq_extension", types.ModuleType("mixdq_extension"))
++    _pkg_stub._C = _C_stub                       # `import a.b` reads `a._C`
++    sys.modules["mixdq_extension._C"] = _C_stub
++    import mixdq_extension._C  # noqa: F401
++
++# Robust against diffusers exec-ing this dynamic module more than once: a second
++# exec finds the stub already in sys.modules, so `import` would spuriously
++# succeed.  Inspect the live _C object for the stub marker instead of trusting
++# the import-time branch.
++MIXDQ_KERNELS_AVAILABLE = not getattr(mixdq_extension._C, "_is_stub", False)
++
++# ── Chameleon-on-MixDQ weight fold (opt-in via MIXDQ_CHAMELEON_WEIGHTS=1) ──────
++# When enabled, the *weight* fold in the fake-quant path is replaced by
++# Chameleon's adaptive (group_size, format) / per-channel SNR search.  The
++# activation path (MixDQ's static calibrated act_scales + BOS) is untouched.
++MIXDQ_CHAMELEON_WEIGHTS = os.environ.get("MIXDQ_CHAMELEON_WEIGHTS", "0") == "1"
++_chameleon_fold_fn = None
++if MIXDQ_CHAMELEON_WEIGHTS:
++    try:
++        _src = os.environ.get(
++            "MIXDQ_CHAMELEON_SRC",
++            "",  # set by chameleon_lcm_generation.py --chameleon-weights
++        )
++        if _src not in sys.path:
++            sys.path.insert(0, _src)
++        from chameleon_weight_fold import chameleon_fake_quant_weight as _chameleon_fold_fn
++        logging.warning("MixDQ: Chameleon adaptive weight fold ENABLED "
++                        "(activations stay on MixDQ's calibrated path).")
++    except Exception as _e:  # noqa: BLE001
++        logging.warning(f"MixDQ: Chameleon weight fold requested but import "
++                        f"failed ({_e}); falling back to MixDQ symmetric fold.")
++        _chameleon_fold_fn = None
+ 
+ from transformers import (
+     CLIPImageProcessor,
+@@ -1242,6 +1293,7 @@
+         self.groups = groups
+     
+         self.valid_for_acceleration = (
++            MIXDQ_KERNELS_AVAILABLE and \
+             w_qparams is not None and \
+             a_qparams is not None and \
+             w_qparams.dtype in [torch.qint8, torch.quint8] and \
+@@ -1274,26 +1326,49 @@
+                     "misalignment. Falling back to FP kernels")
+             self.valid_for_acceleration = False
+ 
++        # W4A8 / W8A8 fake-quant path (split=0 only — shortcut convs stay FP).
++        # Accepts W4 (quint4x2) and, when the kernels are unavailable, W8
++        # (qint8/quint8) too; the weight fold uses w_bit generically.
++        self.use_fake_quant_w4 = (
++            not self.valid_for_acceleration
++            and split == 0
++            and w_qparams is not None
++            and a_qparams is not None
++            and w_qparams.dtype in (torch.quint4x2, torch.qint8, torch.quint8)
++            and w_qparams.qscheme == torch.per_channel_affine
++            and a_qparams.dtype in [torch.qint8, torch.quint8]
++            and a_qparams.qscheme == torch.per_tensor_affine
++        )
++
+         if self.valid_for_acceleration:
+-            self.register_buffer("weight_scales", 
++            self.register_buffer("weight_scales",
+                                  w_qparams.scales.to(device).float())
+-            self.register_buffer("weight_zero_points", 
++            self.register_buffer("weight_zero_points",
+                                  w_qparams.zero_points.to(device).float())
+-            self.register_buffer("act_scales", 
++            self.register_buffer("act_scales",
+                                  a_qparams.scales.to(device).float())
+-            self.register_buffer("act_zero_points", 
++            self.register_buffer("act_zero_points",
+                                  a_qparams.zero_points.to(device).float())
+             self.register_buffer("act_scales_inv", 1 / self.act_scales)
+             if self.split != 0:
+-                self.register_buffer("weight_scales_0", 
++                self.register_buffer("weight_scales_0",
+                                     w_qparams_0.scales.to(device).float())
+-                self.register_buffer("weight_zero_points_0", 
++                self.register_buffer("weight_zero_points_0",
+                                     w_qparams_0.zero_points.to(device).float())
+-                self.register_buffer("act_scales_0", 
++                self.register_buffer("act_scales_0",
+                                     a_qparams_0.scales.to(device).float())
+-                self.register_buffer("act_zero_points_0", 
++                self.register_buffer("act_zero_points_0",
+                                     a_qparams_0.zero_points.to(device).float())
+                 self.register_buffer("act_scales_inv_0", 1 / self.act_scales_0)
++        elif self.use_fake_quant_w4:
++            self.register_buffer("weight_scales",
++                                 w_qparams.scales.to(device).float())
++            self.register_buffer("weight_zero_points",
++                                 w_qparams.zero_points.to(device).float())
++            self.register_buffer("act_scales",
++                                 a_qparams.scales.to(device).float())
++            self.register_buffer("act_zero_points",
++                                 a_qparams.zero_points.to(device).float())
+ 
+     @classmethod
+     def from_float(cls, float_mod, split=0, ckpt=None):
+@@ -1362,10 +1437,10 @@
+         if split == 0:
+             if new_mod.valid_for_acceleration:
+                 weight_int = torch.quantize_per_channel(
+-                    weight.float(), 
+-                    new_mod.weight_scales, 
++                    weight.float(),
++                    new_mod.weight_scales,
+                     new_mod.weight_zero_points,
+-                    axis=w_qparams.axis, 
++                    axis=w_qparams.axis,
+                     dtype=w_qparams.dtype).int_repr()
+ 
+                 new_mod.register_buffer("weight_int", weight_int)
+@@ -1373,19 +1448,35 @@
+                 if float_mod.padding[0] == 0:
+                     weight_sum_per_output_channel = \
+                         weight_int.float().sum(dim=[1,2,3])
+-                    new_mod.register_buffer("bias0", 
++                    new_mod.register_buffer("bias0",
+                         weight_sum_per_output_channel*new_mod.act_zero_points)
+                     new_mod.weight_sum_by_input_channels = None
+                 else:
+                     weight_sum_by_input_channels = \
+                         weight_int.float().sum(dim=1, keepdim=True)
+-                    new_mod.register_buffer("weight_sum_by_input_channels", 
++                    new_mod.register_buffer("weight_sum_by_input_channels",
+                                             weight_sum_by_input_channels)
+                     new_mod.bias0 = None
+-                new_mod.register_buffer("scale", 
++                new_mod.register_buffer("scale",
+                     new_mod.weight_scales * new_mod.act_scales)
++            elif new_mod.use_fake_quant_w4:
++                w_bit = getattr(float_mod, 'w_bit', 4)
++                if _chameleon_fold_fn is not None:
++                    # Chameleon adaptive weight palette (per-channel SNR @ W8 /
++                    # per-layer (g,f) search @ W4). Activations untouched.
++                    w_fake, _ = _chameleon_fold_fn(weight.float(), w_bit)
++                    w_fake = w_fake.reshape(weight.shape).to(weight.dtype)
++                else:
++                    # Symmetric signed N-bit fake-quant, per-output-channel on axis 0.
++                    max_level = float((1 << (w_bit - 1)) - 1)
++                    w_f32 = weight.float()
++                    scales = new_mod.weight_scales.view(-1, 1, 1, 1)
++                    w_q = torch.clamp(torch.round(w_f32 / scales), -max_level, max_level)
++                    w_fake = (w_q * scales).to(weight.dtype)
++                new_mod.register_buffer("weight", w_fake)
++                new_mod.w_bit = w_bit
+             else:
+-                new_mod.register_buffer("weight", weight)            
++                new_mod.register_buffer("weight", weight)
+             if float_mod.bias is not None:
+                 bias = float_mod.bias.detach()
+                 new_mod.register_buffer("bias", bias)
+@@ -1453,8 +1544,17 @@
+     def _get_name(self):
+         if self.valid_for_acceleration:
+             return "QuantizedConv2dW8A8"
++        if self.use_fake_quant_w4:
++            return f"QuantizedConv2dW{getattr(self, 'w_bit', 4)}A8FakeQuant"
+         return "QuantizedConv2dFPFallback"
+-    
++
++    def _fake_quant_a8(self, x: torch.Tensor) -> torch.Tensor:
++        scales = self.act_scales
++        zp = self.act_zero_points
++        x_f32 = x.float()
++        q = torch.clamp(torch.round(x_f32 / scales + zp), -128.0, 127.0)
++        return ((q - zp) * scales).to(x.dtype)
++
+     def forward_fallback(self, x: torch.Tensor):
+         weight_recovered = \
+             self.weight_int.float() * self.weight_scales[:, None, None, None]
+@@ -1491,16 +1591,21 @@
+             return output
+     
+     def forward(self, x: torch.Tensor) -> torch.Tensor:
++        if self.use_fake_quant_w4:
++            x_fake = self._fake_quant_a8(x)
++            return F.conv2d(x_fake, self.weight, self.bias, self.stride,
++                            self.padding, self.dilation, self.groups)
++
+         if not self.valid_for_acceleration:
+-            return F.conv2d(x, self.weight, self.bias, self.stride, self.padding, 
++            return F.conv2d(x, self.weight, self.bias, self.stride, self.padding,
+                             self.dilation, self.groups)
+ 
+         if not x.dtype == torch.float16:
+             return self.forward_fallback(x)
+ 
+         if self.split == 0:
+-            x_int = quantize_per_tensor(x, 
+-                                        self.act_scales_inv, 
++            x_int = quantize_per_tensor(x,
++                                        self.act_scales_inv,
+                                         self.act_zero_points)
+             output = qconv2d(x_int,                             # input_int
+                              self.weight_int,                   # weight_int,
+@@ -1566,6 +1671,7 @@
+         self.out_features = out_features
+         self.device = device
+         self.valid_for_acceleration = (
++            MIXDQ_KERNELS_AVAILABLE and \
+             w_qparams is not None and \
+             a_qparams is not None and \
+             w_qparams.dtype in [torch.qint8, torch.quint8] and \
+@@ -1581,19 +1687,42 @@
+                     f"{self.out_features} cannot use quantized kernel due to "
+                     "misalignment. Falling back to FP kernels")
+             self.valid_for_acceleration = False
+-        
++
++        # W4A8 fake-quant path: no accelerated kernel exists for sub-8-bit
++        # weights, so we fold the W4 symmetric quant into the stored weight
++        # (round→clamp(-7,7)→scale), then do per-tensor A8 fake-quant on the
++        # input at forward time and run a standard F.linear in fp16.
++        self.use_fake_quant_w4 = (
++            not self.valid_for_acceleration
++            and w_qparams is not None
++            and a_qparams is not None
++            and w_qparams.dtype in (torch.quint4x2, torch.qint8, torch.quint8)
++            and w_qparams.qscheme == torch.per_channel_affine
++            and a_qparams.dtype in [torch.qint8, torch.quint8]
++            and a_qparams.qscheme == torch.per_tensor_affine
++        )
++
+         if self.valid_for_acceleration:
+-            self.register_buffer("weight_scales", 
++            self.register_buffer("weight_scales",
+                                  w_qparams.scales.to(device).float())
+-            self.register_buffer("weight_zero_points", 
++            self.register_buffer("weight_zero_points",
+                                  w_qparams.zero_points.to(device).float())
+-            self.register_buffer("act_scales", 
++            self.register_buffer("act_scales",
+                                  a_qparams.scales.to(device).float())
+-            self.register_buffer("act_zero_points", 
++            self.register_buffer("act_zero_points",
+                                  a_qparams.zero_points.to(device).float())
+             self.register_buffer("act_scales_inv", 1 / self.act_scales)
+-        
+-    
++        elif self.use_fake_quant_w4:
++            self.register_buffer("weight_scales",
++                                 w_qparams.scales.to(device).float())
++            self.register_buffer("weight_zero_points",
++                                 w_qparams.zero_points.to(device).float())
++            self.register_buffer("act_scales",
++                                 a_qparams.scales.to(device).float())
++            self.register_buffer("act_zero_points",
++                                 a_qparams.zero_points.to(device).float())
++
++
+     @classmethod
+     def from_float(cls, float_mod, split=0, ckpt=None):
+         assert hasattr(float_mod, 'qconfig') and isinstance(float_mod.qconfig, 
+@@ -1655,22 +1784,43 @@
+ 
+         if new_mod.valid_for_acceleration:
+             weight_int = torch.quantize_per_channel(
+-                weight.float(), 
+-                new_mod.weight_scales, 
++                weight.float(),
++                new_mod.weight_scales,
+                 new_mod.weight_zero_points,
+-                axis=w_qparams.axis, 
++                axis=w_qparams.axis,
+                 dtype=w_qparams.dtype).int_repr()
+ 
+             new_mod.register_buffer("weight_int", weight_int)
+ 
+             # auxiliary structure, used to quickly compute act_zp @ weight
+             weight_sum_by_input_channels = weight_int.float().sum(dim=1)
+-            new_mod.register_buffer("weight_sum_by_input_channels", 
++            new_mod.register_buffer("weight_sum_by_input_channels",
+                                     weight_sum_by_input_channels)
+-            new_mod.register_buffer("scale", 
++            new_mod.register_buffer("scale",
+                                     new_mod.weight_scales*new_mod.act_scales)
+-            new_mod.register_buffer("bias0", 
++            new_mod.register_buffer("bias0",
+                 weight_sum_by_input_channels * new_mod.act_zero_points)
++        elif new_mod.use_fake_quant_w4:
++            # ``w_bit`` comes from the per-layer YAML (or uniform w_bit); dtype
++            # routing maps both 2 and 4 to torch.quint4x2 so the branch handles both.
++            w_bit = getattr(float_mod, 'w_bit', 4)
++            if _chameleon_fold_fn is not None:
++                # Chameleon adaptive weight palette (per-channel SNR @ W8 /
++                # per-layer (g,f) search @ W4). Activations untouched.
++                w_fake, _ = _chameleon_fold_fn(weight.float(), w_bit)
++                w_fake = w_fake.reshape(weight.shape).to(weight.dtype)
++            else:
++                # Symmetric signed N-bit fake-quant: levels [-(2^(N-1)-1), 2^(N-1)-1]
++                # (MixDQ calibrates symmetric, excluding the extra negative level —
++                # the scale-ratio between delta_list entries in the shipped ckpt
++                # matches this: 127/7 for 4→8, 127/1 for 2→8).
++                max_level = float((1 << (w_bit - 1)) - 1)
++                w_f32 = weight.float()
++                scales = new_mod.weight_scales.view(-1, 1)
++                w_q = torch.clamp(torch.round(w_f32 / scales), -max_level, max_level)
++                w_fake = (w_q * scales).to(weight.dtype)
++            new_mod.register_buffer("weight", w_fake)
++            new_mod.w_bit = w_bit
+         else:
+             new_mod.register_buffer("weight", weight)
+         if float_mod.bias is not None:
+@@ -1679,10 +1829,12 @@
+         else:
+             new_mod.bias = None
+         return new_mod
+-    
++
+     def _get_name(self):
+         if self.valid_for_acceleration:
+             return "QuantizedLinearW8A8"
++        if self.use_fake_quant_w4:
++            return f"QuantizedLinearW{getattr(self, 'w_bit', 4)}A8FakeQuant"
+         return "QuantizedLinearFPFallback"
+     
+     def forward_fallback(self, x):
+@@ -1692,7 +1844,21 @@
+                         weight_recovered, 
+                         self.bias.to(x.dtype) if self.bias is not None else None)
+     
++    def _fake_quant_a8(self, x: torch.Tensor) -> torch.Tensor:
++        # Per-tensor asymmetric int8 fake-quant.  ``act_zero_points`` is stored
++        # in int8 space ([-128, 127]) after the uint8→int8 shift applied in
++        # ``get_quant_para``.
++        scales = self.act_scales
++        zp = self.act_zero_points
++        x_f32 = x.float()
++        q = torch.clamp(torch.round(x_f32 / scales + zp), -128.0, 127.0)
++        return ((q - zp) * scales).to(x.dtype)
++
+     def forward(self, x: torch.Tensor) -> torch.Tensor:
++        if self.use_fake_quant_w4:
++            x_fake = self._fake_quant_a8(x)
++            return F.linear(x_fake, self.weight, self.bias)
++
+         if not self.valid_for_acceleration:
+             return F.linear(x, self.weight, self.bias)
+ 
+@@ -1819,8 +1985,18 @@
+     w_bit=8,
+     a_bit=None,
+     bos=True,
+-    bos_dict=None
++    bos_dict=None,
++    w_config_yaml=None,
++    a_config_yaml=None,
+ ):
++    """Register per-layer quantization config on ``unet``.
++
++    ``w_config_yaml`` / ``a_config_yaml`` take precedence when provided — each
++    is either a path to a YAML mapping ``<module_name>: <bit_width>`` or a
++    pre-loaded dict. When absent we fall back to ``w_bit`` / ``a_bit``: 8
++    reuses the shipped W8/A8 uniform configs; 4 builds a uniform W4/A4 config
++    from the same key set. Mixed bit-widths must come through YAML.
++    """
+     import yaml
+ 
+     bw_to_dtype = {
+@@ -1829,12 +2005,37 @@
+         2: torch.quint4x2,  # !!!TODO: 2 is not supported, treat as 4
+     }
+ 
++    def _load_width_map(config, default_bit, fallback_keys, kind):
++        if config is not None:
++            if isinstance(config, str):
++                with open(config, 'r') as f:
++                    width_map = yaml.safe_load(f)
++            elif isinstance(config, dict):
++                width_map = dict(config)
++            else:
++                raise TypeError(
++                    f"{kind}_config_yaml must be a path, dict, or None "
++                    f"(got {type(config).__name__})"
++                )
++        elif default_bit in bw_to_dtype:
++            width_map = {k: default_bit for k in fallback_keys}
++        else:
++            raise RuntimeError(
++                f"Unsupported {kind}_bit={default_bit}. Supported: 4, 8, or "
++                f"supply {kind}_config_yaml with per-layer widths."
++            )
++        for _name, _bits in width_map.items():
++            if _bits not in bw_to_dtype:
++                raise RuntimeError(
++                    f"{kind}_config_yaml has bit-width {_bits} for layer "
++                    f"{_name}; supported: {sorted(bw_to_dtype.keys())}."
++                )
++        return width_map
++
+     # load weight bits
+-    # with open(w_config, 'r') as input_file:
+-    if w_bit == 8:
+-        mod_name_to_weight_width = w8_uniform_config
+-    else:
+-        raise RuntimeError("we only support int8 quantization")
++    mod_name_to_weight_width = _load_width_map(
++        w_config_yaml, w_bit, w8_uniform_config.keys(), 'w'
++    )
+     # filter 'model.' from all names
+     mod_name_to_weight_width_copy = {}
+     for mod_name, bit_width in mod_name_to_weight_width.items():
+@@ -1874,14 +2075,12 @@
+                            "UNet.")
+ 
+     # load activation bits
+-    if a_bit is None:
++    if a_bit is None and a_config_yaml is None:
+         return
+ 
+-    # with open(a_config, 'r') as input_file:
+-    if a_bit == 8:
+-        mod_name_to_act_width = a8_mixed_precision_config
+-    else:
+-        raise RuntimeError("we only support int8 quantization now")
++    mod_name_to_act_width = _load_width_map(
++        a_config_yaml, a_bit, a8_mixed_precision_config.keys(), 'a'
++    )
+     # filter 'model.' from all names
+     mod_name_to_act_width_copy = {}
+     for mod_name, bit_width in mod_name_to_act_width.items():
+@@ -2718,6 +2917,8 @@
+         w_bit=None,
+         a_bit=None,
+         bos=False,
++        w_config_yaml=None,
++        a_config_yaml=None,
+         # cuda_graph_only=True,
+         # run_pipeline=True,
+         # compile=False,
+@@ -2761,7 +2962,9 @@
+             w_bit=w_bit,
+             a_bit=a_bit,
+             bos=bos,
+-            bos_dict=bos_dict
++            bos_dict=bos_dict,
++            w_config_yaml=w_config_yaml,
++            a_config_yaml=a_config_yaml,
+         )
+         convert_to_quantized(self.unet, ckpt)
+     
