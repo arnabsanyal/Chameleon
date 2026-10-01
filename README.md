@@ -143,16 +143,16 @@ conda activate chameleon
 `install/environment.yml` is the exact conda environment the paper's numbers were produced with
 (`conda env create -f install/environment.yml`), if you prefer to pin everything.
 
-**MixDQ pipeline patch (needed for both SDXL-Turbo rows).** MixDQ ships its quantized SDXL-Turbo as a Hugging Face
-custom pipeline that supports W8A8 only. Run this once after installing, and again if you clear the Hugging Face cache:
+**MixDQ setup (needed for both SDXL-Turbo rows).** MixDQ ships its quantized SDXL-Turbo as a Hugging Face custom
+pipeline that supports W8A8 only. Run these once after installing (and the first again if you clear the Hugging Face
+cache):
 
 ```bash
-bash third_party/mixdq/apply_patch.sh
+bash third_party/mixdq/apply_patch.sh      # patch MixDQ's pipeline: W4A8 fake-quant path + Chameleon weight fold
+bash third_party/mixdq/fetch_configs.sh    # download MixDQ's mixed-precision configs from its repository
 ```
 
-It downloads the pinned revision of `nics-efc/MixDQ`'s `pipeline.py` and applies
-[`third_party/mixdq/mixdq_pipeline.patch`](third_party/mixdq/mixdq_pipeline.patch), which adds the W4A8 fake-quant
-path and the opt-in Chameleon weight fold.
+See [`third_party/mixdq`](third_party/mixdq) for what each step changes and the pinned upstream revisions.
 
 ### Paths and data
 
@@ -264,5 +264,5 @@ reuses the palette and the routing rule.
 
 ## License
 
-[MIT](LICENSE). The MixDQ configs in `src/mixdq-lcm/generation/configs/` and the patch in `third_party/mixdq/`
-modify or accompany MixDQ's released code and remain subject to MixDQ's own license.
+[MIT](LICENSE). `third_party/mixdq/mixdq_pipeline.patch` modifies MixDQ's Hugging Face pipeline (MIT); MixDQ's configs
+are downloaded from its repository rather than redistributed. See [`third_party/mixdq`](third_party/mixdq).

@@ -14,3 +14,7 @@ __pycache__/
 .idea/
 .DS_Store
 ._*
+
+# MixDQ's mixed-precision configs are downloaded, not redistributed (third_party/mixdq/fetch_configs.sh)
+src/mixdq-lcm/generation/configs/
+src/chameleon-lcm/generation/configs/

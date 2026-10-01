@@ -116,6 +116,7 @@ conda run --name chameleon python -m pip install tiktoken sentencepiece beautifu
 # MixDQ CUDA kernels — build from source for Python 3.12 compatibility.
 # Pre-built wheels (mixdq-extension on PyPI) only support Python 3.8–3.10.
 # Build process follows: https://github.com/A-suozhang/MixDQ/blob/master/README.md
+rm -rf /tmp/MixDQ
 git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/A-suozhang/MixDQ.git /tmp/MixDQ
 # Make the file writable
 chmod +w /tmp/MixDQ/kernels/third_party/nvidia-cutlass/include/cutlass/cuda_host_adapter.hpp
@@ -128,4 +129,6 @@ with open(path, "w") as f: f.write(code)
 '
 # Restrict to Ampere, Ada, and Hopper to speed up build and avoid SM100+ bleeding-edge bugs
 export TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0"
-conda run --name chameleon python -m pip install --no-build-isolation -e /tmp/MixDQ/kernels
+# Regular (non-editable) install: the built package is copied into the env, so /tmp can be cleared afterwards
+conda run --name chameleon python -m pip install --no-build-isolation /tmp/MixDQ/kernels
+rm -rf /tmp/MixDQ

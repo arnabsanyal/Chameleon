@@ -1,15 +1,12 @@
 """
-Baseline Generation for Image and Video Diffusion Models
-Using SDXL and SVD for FID/FVD calculation
+FP16 SDXL baseline image generation for FID / CLIP evaluation.
 """
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="diffusers")
 
 import torch
-from diffusers import StableDiffusionXLPipeline, StableVideoDiffusionPipeline
-from diffusers.utils import export_to_video
-from PIL import Image
+from diffusers import StableDiffusionXLPipeline
 import os
 from tqdm import tqdm
 import argparse
@@ -21,7 +18,7 @@ from perf_instrument import PerfTracker  # noqa: E402
 
 # CONFIGURATION
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DTYPE = torch.float16  # FP16 as baseline (standard for SDXL/SVD)
+DTYPE = torch.float16  # FP16 reference precision
 OUTPUT_DIR = os.environ.get("CHAMELEON_OUTPUT_ROOT", os.path.join(os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")), "outputs"))
 
 
@@ -143,98 +140,6 @@ class ImageBaselineGenerator:
             torch.cuda.empty_cache()
 
 
-class VideoBaselineGenerator:
-    """Generate videos using SVD for FVD calculation"""
-
-    def __init__(self, device=DEVICE, dtype=DTYPE, model_id="stabilityai/stable-video-diffusion-img2vid-xt"):
-        self.device = device
-        self.dtype = dtype
-        self.model_id = model_id
-        self.pipe = None
-
-    def setup_pipeline(self):
-        """Load SVD pipeline with optimizations"""
-        print(f"Loading SVD from {self.model_id}...")
-        self.pipe = StableVideoDiffusionPipeline.from_pretrained(
-            self.model_id,
-            torch_dtype=self.dtype,
-            variant="fp16"
-        )
-
-        # Move to device (respects CUDA_VISIBLE_DEVICES)
-        self.pipe.to(self.device)
-
-        # Optional: Enable xformers for memory efficiency
-        if self.device.startswith("cuda"):
-            try:
-                self.pipe.enable_xformers_memory_efficient_attention()
-                print("xformers memory efficient attention enabled")
-            except Exception as e:
-                print(f"xformers not available: {e}")
-
-        # Print device info
-        if torch.cuda.is_available():
-            device_idx = torch.cuda.current_device()
-            print(f"Pipeline loaded on {torch.cuda.get_device_name(device_idx)} (cuda:{device_idx})")
-        else:
-            print("Pipeline loaded on CPU")
-        return self.pipe
-
-    def generate_videos(self, input_images, output_dir, fps=7, num_frames=25, decode_chunk_size=8):
-        """
-        Generate videos for FVD calculation.
-
-        Args:
-            input_images: List of PIL Images or paths to images
-            output_dir: Directory to save videos
-            fps: Frames per second for output video
-            num_frames: Number of frames to generate
-            decode_chunk_size: Chunk size for decoding (memory management)
-        """
-        if self.pipe is None:
-            self.setup_pipeline()
-
-        os.makedirs(output_dir, exist_ok=True)
-
-        print(f"Generating {len(input_images)} baseline videos...")
-
-        for i, img_input in enumerate(tqdm(input_images, desc="Generating videos")):
-            try:
-                # Load image if path is provided
-                if isinstance(img_input, (str, Path)):
-                    img = Image.open(img_input).convert("RGB")
-                else:
-                    img = img_input
-
-                # Resize to required dimensions (SVD expects 1024x576)
-                img = img.resize((1024, 576))
-
-                # Generate video frames
-                result = self.pipe(
-                    img,
-                    decode_chunk_size=decode_chunk_size,
-                    num_frames=num_frames,
-                    generator=torch.Generator(device=self.device).manual_seed(i)
-                )
-                frames = result.frames[0]
-
-                # Export to video
-                video_path = f"{output_dir}/{i:05d}.mp4"
-                export_to_video(frames, video_path, fps=fps)
-
-            except Exception as e:
-                print(f"Error generating video {i}: {e}")
-                continue
-
-        print(f"Generated {len(input_images)} videos in {output_dir}")
-
-    def cleanup(self):
-        """Free GPU memory"""
-        if self.pipe is not None:
-            del self.pipe
-            torch.cuda.empty_cache()
-
-
 def load_prompts_from_file(prompt_file):
     """Load prompts from a text file (one prompt per line)"""
     with open(prompt_file, 'r') as f:
@@ -320,9 +225,7 @@ def calculate_fid(real_images_dir, generated_images_dir):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate baseline images and videos")
-    parser.add_argument("--mode", type=str, choices=["image", "video", "both"], default="image",
-                       help="Generation mode")
+    parser = argparse.ArgumentParser(description="Generate FP16 SDXL baseline images")
     parser.add_argument("--num-samples", type=int, default=100,
                        help="Number of samples to generate")
     parser.add_argument("--output-dir", type=str, default=OUTPUT_DIR,
@@ -331,14 +234,10 @@ def main():
                        help="Path to file containing prompts (one per line)")
     parser.add_argument("--coco-captions", type=str, default=None,
                        help="Path to COCO captions JSON (e.g., annotations/captions_val2014.json)")
-    parser.add_argument("--input-images-dir", type=str, default=None,
-                       help="Directory containing input images for video generation")
     parser.add_argument("--num-inference-steps", type=int, default=50,
                        help="Number of inference steps for image generation")
     parser.add_argument("--guidance-scale", type=float, default=7.5,
                        help="Guidance scale for image generation")
-    parser.add_argument("--fps", type=int, default=7,
-                       help="FPS for video generation")
     parser.add_argument("--batch-size", type=int, default=4,
                        help="Batch size for image generation (default: 4)")
     parser.add_argument("--start-ind", type=int, default=0,
@@ -353,87 +252,55 @@ def main():
     # Create output directories
     output_dir = Path(args.output_dir)
     images_dir = output_dir / "images"
-    videos_dir = output_dir / "videos"
 
     # Generate images
-    if args.mode in ["image", "both"]:
-        print("\n" + "="*50)
-        print("GENERATING BASELINE IMAGES")
-        print("="*50 + "\n")
+    print("\n" + "="*50)
+    print("GENERATING BASELINE IMAGES")
+    print("="*50 + "\n")
 
-        # Load or generate prompts
-        if args.coco_captions:
-            prompts = load_coco_captions(args.coco_captions, num_samples=args.num_samples)
-        elif args.prompt_file:
-            prompts = load_prompts_from_file(args.prompt_file)
-        else:
-            prompts = generate_sample_prompts(args.num_samples)
+    # Load or generate prompts
+    if args.coco_captions:
+        prompts = load_coco_captions(args.coco_captions, num_samples=args.num_samples)
+    elif args.prompt_file:
+        prompts = load_prompts_from_file(args.prompt_file)
+    else:
+        prompts = generate_sample_prompts(args.num_samples)
 
-        # Limit to requested number
-        prompts = prompts[:args.num_samples]
+    # Limit to requested number
+    prompts = prompts[:args.num_samples]
 
-        # Apply start index - slice prompts from start_ind onwards
-        start_ind = args.start_ind
-        if start_ind > 0:
-            if start_ind >= len(prompts):
-                print(f"Error: start_ind ({start_ind}) >= num_samples ({len(prompts)})")
-                return
-            prompts = prompts[start_ind:]
-            print(f"Resuming from index {start_ind}, generating {len(prompts)} images (indices {start_ind} to {start_ind + len(prompts) - 1})")
-        else:
-            print(f"Using {len(prompts)} prompts")
-
-        # Generate images
-        generator = ImageBaselineGenerator()
-        generator.generate_images(
-            prompts,
-            str(images_dir),
-            num_inference_steps=args.num_inference_steps,
-            guidance_scale=args.guidance_scale,
-            batch_size=args.batch_size,
-            start_idx=start_ind
-        )
-        generator.cleanup()
-
-        # Calculate FID if requested
-        if args.calculate_fid and args.reference_dir:
-            calculate_fid(args.reference_dir, str(images_dir))
-
-    # Generate videos
-    if args.mode in ["video", "both"]:
-        print("\n" + "="*50)
-        print("GENERATING BASELINE VIDEOS")
-        print("="*50 + "\n")
-
-        # Load input images
-        if args.input_images_dir:
-            input_images = sorted(list(Path(args.input_images_dir).glob("*.png")))[:args.num_samples]
-            input_images = [str(p) for p in input_images]
-        elif args.mode == "both":
-            # Use generated images as input
-            input_images = sorted(list(images_dir.glob("*.png")))[:args.num_samples]
-            input_images = [str(p) for p in input_images]
-        else:
-            print("Error: --input-images-dir required for video mode")
+    # Apply start index - slice prompts from start_ind onwards
+    start_ind = args.start_ind
+    if start_ind > 0:
+        if start_ind >= len(prompts):
+            print(f"Error: start_ind ({start_ind}) >= num_samples ({len(prompts)})")
             return
+        prompts = prompts[start_ind:]
+        print(f"Resuming from index {start_ind}, generating {len(prompts)} images (indices {start_ind} to {start_ind + len(prompts) - 1})")
+    else:
+        print(f"Using {len(prompts)} prompts")
 
-        # Generate videos
-        generator = VideoBaselineGenerator()
-        generator.generate_videos(
-            input_images,
-            str(videos_dir),
-            fps=args.fps
-        )
-        generator.cleanup()
+    # Generate images
+    generator = ImageBaselineGenerator()
+    generator.generate_images(
+        prompts,
+        str(images_dir),
+        num_inference_steps=args.num_inference_steps,
+        guidance_scale=args.guidance_scale,
+        batch_size=args.batch_size,
+        start_idx=start_ind
+    )
+    generator.cleanup()
+
+    # Calculate FID if requested
+    if args.calculate_fid and args.reference_dir:
+        calculate_fid(args.reference_dir, str(images_dir))
 
     print("\n" + "="*50)
     print("GENERATION COMPLETE")
     print("="*50)
     print(f"Output directory: {output_dir}")
-    if args.mode in ["image", "both"]:
-        print(f"Images: {images_dir}")
-    if args.mode in ["video", "both"]:
-        print(f"Videos: {videos_dir}")
+    print(f"Images: {images_dir}")
 
 
 if __name__ == "__main__":
