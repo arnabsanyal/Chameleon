@@ -18,3 +18,7 @@ __pycache__/
 # MixDQ's mixed-precision configs are downloaded, not redistributed (third_party/mixdq/fetch_configs.sh)
 src/mixdq-lcm/generation/configs/
 src/chameleon-lcm/generation/configs/
+
+# Hugging Face staging folders (huggingface/README.md)
+hf_model/
+hf_samples/

@@ -6,8 +6,9 @@
 <p align="center"><b>Dynamic Format Adapter for Efficient Diffusion</b></p>
 
 <p align="center">
+  <a href="https://github.com/arnabsanyal/Chameleon#cite-this-work"><img src="https://img.shields.io/badge/Cite-BibTeX-blueviolet.svg" alt="Cite this work"></a>
   <a href="https://arxiv.org/abs/2609.33496"><img src="https://img.shields.io/badge/arXiv-2609.33496-b31b1b.svg" alt="arXiv"></a>
-  <a href="https://arnabsanyal.github.io/iclr2027/chameleon.html"><img src="https://img.shields.io/badge/Project-Page-2bb3a0.svg" alt="Project page"></a>
+  <a href="https://arnabsanyal.github.io/iclr2027/chameleon.html" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Project-Page-2bb3a0.svg" alt="Project page"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/python-3.12-blue.svg" alt="Python 3.12">
   <img src="https://img.shields.io/badge/PyTorch-2.11-ee4c2c.svg" alt="PyTorch 2.11">
@@ -15,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="https://arnabsanyal.github.io/">Arnab Sanyal</a> &nbsp;·&nbsp; Sandeep Chinchali<br>
+  <a href="https://arnabsanyal.github.io/" target="_blank" rel="noopener noreferrer">Arnab Sanyal</a> &nbsp;·&nbsp; <a href="https://utaustin-swarmlab.github.io/people/sandeep_chinchali/index.html" target="_blank" rel="noopener noreferrer">Sandeep Chinchali</a><br>
   The University of Texas at Austin
 </p>
 
@@ -124,7 +125,7 @@ This work is under review at the [International Conference on Learning Represent
 
 ## Contact
 
-Arnab Sanyal — [sanyal@utexas.edu](mailto:sanyal@utexas.edu) · [arnabsanyal.github.io](https://arnabsanyal.github.io/).
+Arnab Sanyal — [sanyal@utexas.edu](mailto:sanyal@utexas.edu) · <a href="https://arnabsanyal.github.io/" target="_blank" rel="noopener noreferrer">arnabsanyal.github.io</a>.
 Bug reports and questions are welcome as GitHub issues.
 
 ## Installing Dependencies
@@ -230,6 +231,7 @@ python src/mixdq-lcm/generation/mixdq_lcm_generation.py --w-bit 8 \
 | `src/test` | metrics: clean-FID, CLIP-score, timing instrumentation |
 | `install` | environment installer, verifier and pinned conda environment |
 | `third_party/mixdq` | patch for MixDQ's Hugging Face pipeline |
+| `huggingface` | scripts and cards that build the Hugging Face artifact and sample repositories |
 
 ## Model artifacts and samples
 
@@ -238,7 +240,24 @@ Chameleon does not ship quantized weights: it quantizes the public checkpoints
 [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo),
 [PixArt-α XL/2 1024-MS](https://huggingface.co/PixArt-alpha/PixArt-XL-2-1024-MS)) at load time. What is worth
 downloading is the calibration output (activation LUTs and weight-format configs, from about 100 KB to 18 MB per
-model) and the generated samples. Links will be added here when they are released.
+model) and the generated samples:
+
+- **Calibration artifacts**: [huggingface.co/arnabsanyal/chameleon](https://huggingface.co/arnabsanyal/chameleon).
+  SDXL and PixArt-α configs for W8A8 and W4A8, each with its activation LUT embedded, so `--load-weights` skips
+  calibration; plus the scores for every Table 1 row. SDXL-Turbo needs no file, because its weights are folded at
+  load time over MixDQ's configs.
+- **Generated samples**: [huggingface.co/datasets/arnabsanyal/chameleon-coco-samples](https://huggingface.co/datasets/arnabsanyal/chameleon-coco-samples).
+  The 24,576 COCO-2014 images scored for each Chameleon and FP16 row of Table 1, with the caption, seed and CLIP score
+  of every image.
+
+```bash
+hf download arnabsanyal/chameleon --local-dir artifacts
+python src/sdxl-chameleon/generation/chameleon_generation.py --weight-bits 4 \
+    --load-weights artifacts/sdxl/w4a8/chameleon_sdxl_w4a8.json \
+    --coco-captions $CAPS --num-samples 24576 --num-inference-steps 50 --guidance-scale 7.5
+```
+
+[`huggingface/`](huggingface) holds the scripts that build both repositories.
 
 ## Extending Chameleon
 
@@ -249,8 +268,8 @@ reuses the palette and the routing rule.
 
 ## TODO
 
-- [ ] Release calibration artifacts (activation LUTs, weight-format configs) for all six Table 1 settings
-- [ ] Release the generated COCO-2014 samples behind Table 1
+- [x] Release calibration artifacts (activation LUTs, weight-format configs) for all six Table 1 settings
+- [x] Release the generated COCO-2014 samples behind Table 1
 - [ ] Measure latency and memory with native FP8 / MX kernels
 
 ## References
