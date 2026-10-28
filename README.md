@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/chameleon-banner.svg" alt="Chameleon logo" width="180">
+  <img src="https://arnabsanyal.com/preprint/images/brand/chameleon-logo.svg" alt="Chameleon logo" width="180">
 </p>
 
 <h1 align="center">Chameleon</h1>
@@ -7,15 +7,15 @@
 
 <p align="center">
   <a href="https://arxiv.org/abs/2609.33496"><img src="https://img.shields.io/badge/arXiv-2609.33496-b31b1b.svg" alt="arXiv"></a>
-  <a href="https://arnabsanyal.github.io/iclr2027/chameleon.html"><img src="https://img.shields.io/badge/Project-Page-2bb3a0.svg" alt="Project page"></a>
+  <a href="https://arnabsanyal.com/preprint/chameleon.html"><img src="https://img.shields.io/badge/Project-Page-2bb3a0.svg" alt="Project page"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/python-3.12-blue.svg" alt="Python 3.12">
   <img src="https://img.shields.io/badge/PyTorch-2.11-ee4c2c.svg" alt="PyTorch 2.11">
-  <img src="https://img.shields.io/badge/ICLR%202027-under%20review-lightgrey.svg" alt="ICLR 2027 under review">
+  <img src="https://img.shields.io/badge/Preprint-under%20review-lightgrey.svg" alt="Preprint under review">
 </p>
 
 <p align="center">
-  <a href="https://arnabsanyal.github.io/">Arnab Sanyal</a> &nbsp;·&nbsp; Sandeep Chinchali<br>
+  <a href="https://arnabsanyal.com/">Arnab Sanyal</a> &nbsp;·&nbsp; Sandeep Chinchali<br>
   The University of Texas at Austin
 </p>
 
@@ -25,14 +25,14 @@
 > six backbone × bit-width settings we test.
 
 <p align="center">
-  <img src="assets/teaser/qdiffusion_w4a8.jpg" width="15%" alt="Q-Diffusion">
-  <img src="assets/teaser/chameleon_sdxl_w4a8.jpg" width="15%" alt="Chameleon on SDXL">
+  <img src="https://arnabsanyal.com/preprint/images/qdiffusion_w4a8.jpg" width="15%" alt="Q-Diffusion">
+  <img src="https://arnabsanyal.com/preprint/images/chameleon_sdxl_w4a8.jpg" width="15%" alt="Chameleon on SDXL">
   &nbsp;
-  <img src="assets/teaser/mixdq_w4a8.jpg" width="15%" alt="MixDQ">
-  <img src="assets/teaser/chameleon_lcm_w4a8.jpg" width="15%" alt="Chameleon on SDXL-Turbo">
+  <img src="https://arnabsanyal.com/preprint/images/mixdq_w4a8.jpg" width="15%" alt="MixDQ">
+  <img src="https://arnabsanyal.com/preprint/images/chameleon_lcm_w4a8.jpg" width="15%" alt="Chameleon on SDXL-Turbo">
   &nbsp;
-  <img src="assets/teaser/qdit_w4a8.jpg" width="15%" alt="Q-DiT">
-  <img src="assets/teaser/chameleon_dit_w4a8.jpg" width="15%" alt="Chameleon on PixArt-alpha">
+  <img src="https://arnabsanyal.com/preprint/images/qdit_w4a8.jpg" width="15%" alt="Q-DiT">
+  <img src="https://arnabsanyal.com/preprint/images/chameleon_dit_w4a8.jpg" width="15%" alt="Chameleon on PixArt-alpha">
   <br>
   <sub>W4A8, COCO-2014 caption <i>"An old city fire hydrant has 'Love was found here' painted on it."</i>
   Pairs, left to right: Q-Diffusion vs. Chameleon (SDXL), MixDQ vs. Chameleon (SDXL-Turbo), Q-DiT vs. Chameleon (PixArt-α).</sub>
@@ -56,7 +56,7 @@ CLIP within 0.24 of the FP16 reference and the best of all quantized methods at 
 
 ## How it works
 
-<p align="center"><img src="assets/figures/overview.png" width="95%" alt="Chameleon framework overview"></p>
+<p align="center"><img src="https://arnabsanyal.com/preprint/images/chameleon_schematic.png" width="95%" alt="Chameleon framework overview"></p>
 
 - **Weights** are static, so their format is chosen offline: per output channel (SDXL) or per layer jointly with
   the group size (SDXL-Turbo at 4 bits, PixArt-α), by maximizing reconstruction SQNR.
@@ -73,7 +73,7 @@ CLIP within 0.24 of the FP16 reference and the best of all quantized methods at 
 - **An architectural fork** threads the same selection layer through each model family's established PTQ recipe
   instead of replacing it: Q-Diffusion-style static scales for UNets, MixDQ's calibrated activations for the
   one-step SDXL-Turbo (Chameleon supplies only the weights there), and Q-DiT-style dynamic per-sample scaling for
-  DiTs. Per-path diagrams: [UNet](assets/figures/unet_path.png), [DiT](assets/figures/dit_path.png).
+  DiTs. Per-path diagrams: [UNet](https://arnabsanyal.com/preprint/images/unet_schematic.png), [DiT](https://arnabsanyal.com/preprint/images/dit_schematic.png).
 
 ## Results
 
@@ -103,10 +103,6 @@ ViT-L/14 (cosine × 100). All quantized numbers use fake quantization on a singl
 Ablations (routing signals, palette, bucket count, per-fork additions) are in Appendix A.9 of the paper and in
 [`src/ablations`](src/ablations).
 
-## About ICLR 2027
-
-This work is under review at the [International Conference on Learning Representations (ICLR) 2027](https://iclr.cc/).
-
 ## Cite this work
 
 ```bibtex
@@ -117,14 +113,13 @@ This work is under review at the [International Conference on Learning Represent
   eprint        = {2609.33496},
   archivePrefix = {arXiv},
   primaryClass  = {cs.LG},
-  url           = {https://arxiv.org/abs/2609.33496},
-  howpublished  = {Under review at the International Conference on Learning Representations (ICLR) 2027}
+  url           = {https://arxiv.org/abs/2609.33496}
 }
 ```
 
 ## Contact
 
-Arnab Sanyal — [sanyal@utexas.edu](mailto:sanyal@utexas.edu) · [arnabsanyal.github.io](https://arnabsanyal.github.io/).
+Arnab Sanyal — [sanyal@utexas.edu](mailto:sanyal@utexas.edu) · [arnabsanyal.com](https://arnabsanyal.com/).
 Bug reports and questions are welcome as GitHub issues.
 
 ## Installing Dependencies
